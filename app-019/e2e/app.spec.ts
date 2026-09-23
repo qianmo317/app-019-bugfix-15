@@ -151,6 +151,40 @@ test.describe('全流程：选类型 → 填尺寸 → 出三视图 → 打印 1
     }
   })
 
+  test('导入缺关键项的方案：明确报错说清缺哪一项，且不写入方案库', async ({ page }) => {
+    await goto(page)
+    const bad = {
+      id: 'bad-e2e',
+      title: '缺板B',
+      parts: [],
+      scale: '1:1',
+      updatedAt: 1,
+      joints: [
+        {
+          kind: 'dovetail',
+          notes: [],
+          params: {
+            boardA: { thickness: 18, width: 200 },
+            wood: 'hardwood',
+            fit: 'standard',
+            kerfMm: 1.1,
+            dovetail: { angleRatio: 8 },
+          },
+        },
+      ],
+    }
+    await page.setInputFiles('[data-testid="import-input"]', {
+      name: 'bad.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(bad)),
+    })
+    const alert = page.getByRole('alert')
+    await expect(alert).toBeVisible()
+    await expect(alert).toContainText('件B/销板')
+    await expect(alert).toContainText('缺少关键参数')
+    await expect(page.getByTestId('plan-card')).toHaveCount(0)
+  })
+
   test('知识卡页面展示 7 张经验卡', async ({ page }) => {
     await goto(page, '/#/library')
     await expect(page.getByTestId('library-page')).toBeVisible()

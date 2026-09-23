@@ -115,4 +115,91 @@ describe('燕尾齿宽分配（蓝图 §8 约束）', () => {
     const r = computeDovetail({ width: 45, thickness: 18, ratio: 6, teeth: n, kerf: 1.1, wood: 'softwood' })
     expect(Math.min(...r.teeth.map((t) => t.rootW))).toBeGreaterThanOrEqual(MIN_ROOT.softwood - 1e-9)
   })
+
+  it('销板：全销落在齿间槽里，不与齿板背面的齿重合（贴合面与背面槽互补）', () => {
+    // 全销贴合面轮廓 == 齿板背面齿间槽（backX+rootW 起，至下一齿 backX），宽 = topW
+    const r = computeDovetail({ width: 200, thickness: 18, ratio: 8, teeth: 5, kerf: 1.1, wood: 'hardwood' })
+    const full = r.pins.filter((p) => !p.half)
+    expect(full).toHaveLength(r.teeth.length - 1)
+    for (let i = 0; i < r.teeth.length - 1; i++) {
+      const a = r.teeth[i]
+      const b = r.teeth[i + 1]
+      const pin = full[i]
+      // 贴合面：销左缘 = 齿i 背面右缘；销右缘 = 齿i+1 背面左缘
+      expect(pin.jointX).toBeCloseTo(a.backX + a.rootW, 6)
+      expect(pin.jointX + pin.jointW).toBeCloseTo(b.backX, 6)
+      expect(pin.jointW).toBeCloseTo(b.backX - a.backX - a.rootW, 6)
+      // 销宽 = 背面槽宽 ≈ 齿顶宽 topW（0.1mm 网格二次分配，逐槽误差 ≤0.1）
+      expect(Math.abs(pin.jointW - a.topW)).toBeLessThanOrEqual(0.1 + 1e-9)
+      // 修复前销与正面齿同 x、同宽；现在销区间与背面任一齿区间严格不重叠
+      for (const th of r.teeth) {
+        const pinL = pin.jointX
+        const pinR = pin.jointX + pin.jointW
+        const toothL = th.backX
+        const toothR = th.backX + th.rootW
+        expect(Math.min(pinR, toothR) - Math.max(pinL, toothL)).toBeLessThanOrEqual(1e-9)
+      }
+    }
+    // 端面上销与背面齿【交替】铺满：半销 → 齿1 → 全销 → 齿2 → … → 半销，无重叠无缝隙
+    const seq: { x: number; w: number }[] = []
+    r.pins.forEach((p, i) => {
+      seq.push({ x: p.jointX, w: p.jointW })
+      if (i < r.teeth.length) seq.push({ x: r.teeth[i].backX, w: r.teeth[i].rootW })
+    })
+    for (let i = 0; i < seq.length - 1; i++) {
+      expect(seq[i + 1].x).toBeCloseTo(seq[i].x + seq[i].w, 6)
+    }
+  })
+
+  it('销板：两端各有一个半齿销，贴合面宽端 = 边距 + 单边斜移量；销+齿铺满板宽', () => {
+    const W = 200
+    const r = computeDovetail({ width: W, thickness: 18, ratio: 8, teeth: 5, kerf: 1.1, wood: 'hardwood' })
+    const halfs = r.pins.filter((p) => p.half)
+    expect(halfs).toHaveLength(2)
+    const [left, right] = halfs
+    expect(left.index).toBe(0)
+    expect(right.index).toBe(r.teeth.length)
+    // 左半销从 0 开始，宽 = 首齿背面起点 = 边距 + 斜移量；右半销到板宽结束
+    expect(left.jointX).toBeCloseTo(0, 6)
+    expect(left.jointW).toBeCloseTo(r.margin + r.slopeOffset, 6)
+    expect(right.jointX + right.jointW).toBeCloseTo(W, 6)
+    expect(Math.abs(right.jointW - (r.margin + r.slopeOffset))).toBeLessThanOrEqual(0.1 + 1e-9)
+    // 贴合面：Σ销宽 + Σ背面齿宽 = 板宽（端面销齿交替，严格闭合）
+    const pinSum = r.pins.reduce((s, p) => s + p.jointW, 0)
+    const toothSum = r.teeth.reduce((s, t) => s + t.rootW, 0)
+    expect(pinSum + toothSum).toBeCloseTo(W, 6)
+    // 宽端 > 边距：半齿销斜度真实存在（修复前两端看不到半齿销、被全齿占住）
+    expect(left.jointW).toBeGreaterThan(r.margin)
+  })
+
+  it('随机 200 组：贴合面销与背面齿交替铺满板宽（销落齿间槽，闭合 ≤0.1mm）', () => {
+    const rand = mulberry32(20260923)
+    for (let i = 0; i < 200; i++) {
+      const width = Math.round((50 + rand() * 550) * 2) / 2
+      const teeth = 2 + Math.floor(rand() * 11)
+      const ratio = ([6, 7, 8] as const)[Math.floor(rand() * 3)]
+      const wood = rand() < 0.5 ? 'softwood' : 'hardwood'
+      const thickness = Math.round((12 + rand() * 24) * 2) / 2
+      const kerf = [0.8, 1.1, 1.6, 2.2][Math.floor(rand() * 4)]
+      const r = computeDovetail({ width, thickness, ratio, teeth, kerf, wood })
+      // 销数 = 齿数 + 1（两端半销 + 齿间全销）
+      expect(r.pins).toHaveLength(teeth + 1)
+      expect(r.pins[0].half).toBe(true)
+      expect(r.pins[r.pins.length - 1].half).toBe(true)
+      // 贴合面（背面互补面）：半销/齿/全销交替，累计到板宽
+      let x = 0
+      for (let k = 0; k < teeth; k++) {
+        x += r.pins[k].jointW
+        expect(x).toBeCloseTo(r.teeth[k].backX, 6)
+        x += r.teeth[k].rootW
+      }
+      x += r.pins[teeth].jointW
+      expect(Math.abs(x - width)).toBeLessThanOrEqual(0.1 + 1e-9)
+      // 坐标有限
+      for (const p of r.pins) {
+        expect(Number.isFinite(p.jointX)).toBe(true)
+        expect(Number.isFinite(p.jointW)).toBe(true)
+      }
+    }
+  })
 })

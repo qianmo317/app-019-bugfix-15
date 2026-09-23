@@ -138,27 +138,66 @@ function dovetailViews(kind: JointKind, p: Joint['params'], dt: DovetailResult):
   }
   top.texts.push({ x: 0, y: LJ + 24, text: '↑ 拼接端；按虚线（锯切线）下锯', anchor: 'start', cls: 'note' })
 
-  // 侧视图：销板端面（W_B × t_B），燕尾互补齿
-  const side = base('side', '侧视图 · 销板端面', Wb, tB)
+  // 侧视图：销板端面（W_B × t_B），燕尾互补销
+  // y=0 为贴合面（销宽端，与齿板背面齿间槽互补，全销宽 = 齿顶宽 topW）；
+  // 销向远端按燕尾角收窄，水平斜移量 = 齿板斜移量 slopeOffset，使远端截面与齿板
+  // 正面图案互补（全销远端宽 = 齿根宽 rootW，两端半销 = 边距）。
+  // 穿透式远端在 y=t_B；半隐槽不开穿，槽底在 y=depth（0.75×板厚）。
+  const side = base('side', blind ? '侧视图 · 销板端面（半隐）' : '侧视图 · 销板端面', Wb, tB)
   rect(side, 0, 0, Wb, tB)
-  const slope = tB / ratio
-  for (const pin of dt.pins) {
-    const y1 = 0 // 与齿板背面贴合面
-    const y2 = tB
-    const w1 = pin.backW // 贴合面处销宽
-    const w2 = Math.max(0.5, pin.backW - 2 * slope) // 远端收窄
-    const x1 = pin.backX
-    const x2 = pin.backX + (w1 - w2) / 2
-    side.lines.push(
-      { x1: x1, y1: y1, x2: x2, y2: y2, cls: 'cut' },
-      { x1: x1 + w1, y1: y1, x2: x2 + w2, y2: y2, cls: 'cut' },
-      { x1: x2, y1: y2, x2: x2 + w2, y2: y2, cls: 'cut' },
-    )
-    if (!pin.half) side.marks.push({ x: x1 + w1 / 2, y: tB / 2, text: `销${pin.index}` })
+  const yFar = blind ? dt.depth : tB
+  const slope = dt.slopeOffset // 销侧单边斜移量 = 齿板斜移量（t_A/r），两视图严格互补
+  type PinEdge = { x: number; w: number }
+  const farEdge = (pin: (typeof dt.pins)[number]): PinEdge => {
+    // 全销两侧各内收 slope；半齿销外侧贴板边不动，只内侧收
+    if (pin.half && pin.index === 0) return { x: 0, w: Math.max(0, pin.jointW - slope) }
+    if (pin.half) return { x: pin.jointX + slope, w: Math.max(0, Wb - (pin.jointX + slope)) }
+    return { x: pin.jointX + slope, w: Math.max(0.5, pin.jointW - 2 * slope) }
   }
+  const fars: PinEdge[] = []
+  for (const pin of dt.pins) {
+    const far = farEdge(pin)
+    fars.push(far)
+    // 宽端（贴合面 y=0）→ 窄端（远端 y=yFar），左右各一条斜线
+    side.lines.push(
+      { x1: pin.jointX, y1: 0, x2: far.x, y2: yFar, cls: 'cut' },
+      { x1: pin.jointX + pin.jointW, y1: 0, x2: far.x + far.w, y2: yFar, cls: 'cut' },
+    )
+    if (!pin.half) {
+      side.marks.push({ x: pin.jointX + pin.jointW / 2, y: tB / 2, text: `销${pin.index}` })
+    }
+  }
+  if (blind) {
+    // 半隐：槽不开穿，每个槽底（相邻销尖之间）连一条实线，槽底以外是保留料
+    for (let i = 0; i < fars.length - 1; i++) {
+      side.lines.push({ x1: fars[i].x + fars[i].w, y1: yFar, x2: fars[i + 1].x, y2: yFar, cls: 'cut' })
+    }
+  }
+  // 斜度标注：贴在第一个全销的斜线上
+  const firstFullIdx = dt.pins.findIndex((p) => !p.half)
+  if (firstFullIdx >= 0) {
+    side.texts.push({
+      x: fars[firstFullIdx].x - 2,
+      y: yFar / 2,
+      text: `斜度 1:${ratio}`,
+      anchor: 'end',
+      cls: 'angle',
+    })
+  }
+  // 半齿销标注（两端各一）
+  side.texts.push({ x: 0, y: -6, text: '半齿销', anchor: 'start', cls: 'note' })
+  side.texts.push({ x: Wb, y: -6, text: '半齿销', anchor: 'end', cls: 'note' })
   hdim(side, 0, Wb, tB + 12, `板宽 ${fmtDrawing(Wb)}`)
   vdim(side, 0, tB, -12, `厚 ${fmtDrawing(tB)}`)
-  side.texts.push({ x: 0, y: tB + 24, text: blind ? `配齿板：齿深 ${fmtDrawing(dt.depth)}mm（半隐）` : '配齿板：穿透', anchor: 'start', cls: 'note' })
+  side.texts.push({
+    x: 0,
+    y: tB + 24,
+    text: blind
+      ? `销位对齐齿间槽，贴合面到槽底按 1:${ratio} 变窄；齿深 ${fmtDrawing(dt.depth)}mm（半隐）`
+      : `销位对齐齿间槽，贴合面到背面按 1:${ratio} 变窄；配齿板：穿透`,
+    anchor: 'start',
+    cls: 'note',
+  })
 
   return [front, top, side]
 }

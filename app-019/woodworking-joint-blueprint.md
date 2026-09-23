@@ -104,9 +104,9 @@ interface ViewModel { id: 'front'|'top'|'side'; title: string; contentW: number;
 - **齿宽分配**：200 组随机参数（可复现种子 `mulberry32(20260916)`，板宽 50~600、齿数 2~12、角度比 6/7/8、kerf 0.8~2.2）闭合误差 ≤ 0.1mm；低于最小安全值等违规情形必须出警告，正常情形警告必须为空。
 - **直榫**：10 组手工核算用例，20mm 硬木标准配合 → 榫厚 6.7mm；紧配 +0.2、松配 −0.3；穿透榫眼深 = 孔板厚 + 1。
 - **三视图**：六种类型逐一断言 `front.contentW === top.contentW`，每类 3 个视图，几何坐标不越界；燕尾锯切线数 = 2 × 齿数，齿序编号覆盖每个齿。
-- **导出/导入**：`importJSON(exportJSON(plan))` 与原文 `JSON.stringify` 全等；缺字段或坏 JSON 必须抛错；E2E 覆盖「导出 → 删除 → 导入 → viewBox 与参数一致」。
+- **导出/导入**：`importJSON(exportJSON(plan))` 与原文 `JSON.stringify` 全等；缺关键项（kind、A/B 板厚宽）必须抛错且错误信息逐项点名，缺 wood/fit/kerfMm 等可补项按默认补全并在结果中说明；坏 JSON 必须抛错；E2E 覆盖「导出 → 删除 → 导入 → viewBox 与参数一致」。
 - **性能**：参数改动到图纸重算 < 100ms（README 记录 0.51ms，本机重跑 0.57ms）。
-- **测试总量**：vitest 5 个文件 53 例 = 单元 43（dovetail 8 / tenon 13 / views 14 / store 8）+ 组件 10；Playwright E2E 7 例。
+- **测试总量**：vitest 5 个文件 63 例 = 单元 51（dovetail 11 / tenon 13 / views 16 / store 11）+ 组件 12；Playwright E2E 8 例（含导入缺关键项被拒绝且不写库）。
 - **打印**：页面含 100mm 校验尺，实测 0→100 段误差 ≤ 1mm；打印调用与模板页可被 E2E 断言。
 - **容器**：`docker compose up -d --build` 后 `curl http://localhost:8099/healthz` 返回 `ok`，容器 healthy（详见 §12）。
 
@@ -121,7 +121,7 @@ interface ViewModel { id: 'front'|'top'|'side'; title: string; contentW: number;
 4. **榫眼 +1mm 的解释与代码/知识卡不同**：README 写「穿透深度 = 榫孔板厚 + 1（露出部分便于修平）」，代码注释与知识卡都写的是眼底留量防（胶）顶底；且加 1mm 的是 `mortiseDepth`，`tenonLength` 不加（`tenon.ts:50-51`）。
 5. **`Scale` 与多榫卯只有模型没有界面**：`Drawing.scale` 恒为 `'1:1'`（`store/plans.ts:95`），`Part.jointIds` 恒为空数组（`plans.ts:91-92`）；编辑器只渲染 `joints[0]`（`EditorPage.tsx:40`），方案筛选同样只看 `joints[0]`（`plans.ts:42`），打印视图按实际尺寸出（`EditorPage.tsx:276`），因此 1:2 / 1:5 出图与单方案多榫卯均未实现。
 6. **图内注释文字与线型不完全对得上**：`views.ts:120` 的提示写「细线=理论线　虚线=锯切线」，而正视图的理论轮廓用的是 `cut`（0.5 实线），`thin`（0.25）只用在俯视图大面划线上。
-7. **导入校验偏松**：`importJSON` 只校验 `id/title/joints/joints[0].kind/params.boardA`（`plans.ts:58-64`），缺 `boardB`、`wood`、`fit`、`kerfMm` 的 JSON 会被接受，随后计算可能得到 `NaN` 尺寸而不是报错。
+7. **导入校验（已收紧）**：`importPlanJSON`（`src/store/plans.ts`）先逐项校验 `joints[0].kind`、`params.boardA/boardB` 的 `thickness/width`（正数），缺关键项抛 `PlanImportError` 且错误信息逐项列清缺哪一项，首页 `role="alert"` 展示、**不写回 localStorage**；缺 `wood`/`fit`/`kerfMm` 或可选的 `dovetail`/`tenon` 非法值时按默认补全（硬木/标准/1.1mm），`fixes` 数组说明补了什么，首页以绿色提示条告知用户核对后再保存。根字段（`id/title/parts/scale/updatedAt`）缺失也按默认补齐。
 8. **`Joint.notes` 未被使用**：`makePlan` 的第 3 个参数默认空数组，两个调用点都不传，编辑器也不渲染。
 
 ## 12. 容器化与构建（Docker）

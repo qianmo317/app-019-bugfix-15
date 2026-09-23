@@ -1,6 +1,6 @@
 // 方案库：导出/导入往返一致（蓝图 §10）+ 筛选 + 性能（重算 <100ms）
 import { describe, it, expect, beforeEach } from 'vitest'
-import { makePlan, exportJSON, importJSON, filterPlans, loadPlans, upsertPlan, deletePlan } from '../../src/store/plans'
+import { makePlan, exportJSON, importJSON, importPlanJSON, PlanImportError, filterPlans, loadPlans, upsertPlan, deletePlan } from '../../src/store/plans'
 import { computeJoint } from '../../src/lib/calc'
 import { buildViews } from '../../src/geometry/views'
 import { round01, round05, fmtDrawing, fmt01 } from '../../src/lib/format'
@@ -41,11 +41,136 @@ describe('方案库导出/导入', () => {
   })
 
   it('导入校验拒绝缺字段/坏 JSON', () => {
-    expect(() => importJSON('{}')).toThrow()
-    expect(() => importJSON('not json')).toThrow()
+    expect(() => importJSON('{}')).toThrow(/joints/)
+    expect(() => importJSON('not json')).toThrow(/JSON/)
     expect(() =>
       importJSON(JSON.stringify({ id: 'x', title: 't', joints: [{ kind: 'dovetail' }] })),
     ).toThrow(/params/)
+  })
+
+  it('缺关键项必须报错且逐项说清缺哪一项（缺板厚/板宽/板B）', () => {
+    const valid = {
+      id: 'p1',
+      title: 't',
+      parts: [],
+      scale: '1:1',
+      updatedAt: 1,
+      joints: [
+        {
+          kind: 'dovetail',
+          notes: [],
+          params: {
+            boardA: { thickness: 18, width: 200 },
+            boardB: { thickness: 18, width: 200 },
+            wood: 'hardwood',
+            fit: 'standard',
+            kerfMm: 1.1,
+          },
+        },
+      ],
+    }
+
+    // 缺整个 boardB
+    const noB = JSON.parse(JSON.stringify(valid))
+    delete noB.joints[0].params.boardB
+    expect(() => importPlanJSON(JSON.stringify(noB))).toThrow(/件B\/销板/)
+
+    // 缺 boardA.thickness
+    const noTh = JSON.parse(JSON.stringify(valid))
+    delete noTh.joints[0].params.boardA.thickness
+    let err: unknown
+    try {
+      importPlanJSON(JSON.stringify(noTh))
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(PlanImportError)
+    expect((err as Error).message).toMatch(/板厚/)
+    expect((err as Error).message).toMatch(/thickness/)
+
+    // 缺 kind / params / joints 仍然报错
+    expect(() => importPlanJSON(JSON.stringify({ joints: [{ params: {} }] }))).toThrow(/kind/)
+    expect(() => importPlanJSON(JSON.stringify({ joints: [{ kind: 'dovetail' }] }))).toThrow(/params/)
+
+    // 关键项缺失时绝不落库
+    expect(loadPlans()).toHaveLength(0)
+    expect(() => {
+      try {
+        importPlanJSON(JSON.stringify(noB))
+      } catch {
+        /* 页面层捕获后不写库 */
+      }
+    }).not.toThrow()
+    expect(loadPlans()).toHaveLength(0)
+  })
+
+  it('缺木料/配合/锯路等可补项：按默认补全且 fixes 说明缺哪一项', () => {
+    const params = {
+      boardA: { thickness: 18, width: 200 },
+      boardB: { thickness: 18, width: 200 },
+      dovetail: { angleRatio: 8 },
+    }
+    const plan = {
+      id: 'p2',
+      title: 't',
+      parts: [],
+      scale: '1:1',
+      updatedAt: 1,
+      joints: [{ kind: 'dovetail', notes: [], params }],
+    }
+    const { plan: restored, fixes } = importPlanJSON(JSON.stringify(plan))
+    const p = restored.joints[0].params
+    expect(p.wood).toBe('hardwood')
+    expect(p.fit).toBe('standard')
+    expect(p.kerfMm).toBe(1.1)
+    expect(fixes.some((f) => f.includes('木料'))).toBe(true)
+    expect(fixes.some((f) => f.includes('配合'))).toBe(true)
+    expect(fixes.some((f) => f.includes('锯路'))).toBe(true)
+
+    // 补全后的参数能正常计算出有限尺寸（修复前：榫厚空白/图纸 NaN）
+    const joint: Joint = restored.joints[0]
+    const result = computeJoint(joint)
+    expect(Number.isFinite(result.dovetail!.closureError)).toBe(true)
+    for (const t of result.dovetail!.teeth) {
+      expect(Number.isFinite(t.topW)).toBe(true)
+      expect(Number.isFinite(t.rootW)).toBe(true)
+    }
+    const views = buildViews(joint, result)
+    for (const v of views) {
+      for (const l of v.lines) {
+        expect(Number.isFinite(l.x1)).toBe(true)
+        expect(Number.isFinite(l.y2)).toBe(true)
+      }
+    }
+  })
+
+  it('非法可选参数（角度比/齿数）按默认修正并在 fixes 说明，不产生 NaN', () => {
+    const plan = {
+      id: 'p3',
+      title: 't',
+      parts: [],
+      scale: '1:1',
+      updatedAt: 1,
+      joints: [
+        {
+          kind: 'dovetail',
+          notes: [],
+          params: {
+            boardA: { thickness: 18, width: 200 },
+            boardB: { thickness: 18, width: 200 },
+            wood: 'hardwood',
+            fit: 'standard',
+            kerfMm: 1.1,
+            dovetail: { angleRatio: 9, teeth: -3 },
+          },
+        },
+      ],
+    }
+    const { plan: restored, fixes } = importPlanJSON(JSON.stringify(plan))
+    expect(restored.joints[0].params.dovetail?.angleRatio).toBe(8)
+    expect(restored.joints[0].params.dovetail?.teeth).toBeUndefined()
+    expect(fixes.some((f) => f.includes('角度比'))).toBe(true)
+    expect(fixes.some((f) => f.includes('齿数'))).toBe(true)
   })
 
   it('按「榫卯类型 + 木料厚度」筛选', () => {

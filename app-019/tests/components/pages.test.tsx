@@ -147,6 +147,67 @@ describe('列表页：筛选 + 删除 + 导入', () => {
     expect(await screen.findAllByTestId('plan-card')).toHaveLength(1)
     expect(onImported).toHaveBeenCalled()
   })
+
+  it('导入缺板厚/板B的文件：明确报错指出缺项，且不写入方案库', async () => {
+    const bad = {
+      id: 'bad1',
+      title: '坏方案',
+      parts: [],
+      scale: '1:1',
+      updatedAt: 1,
+      joints: [
+        {
+          kind: 'dovetail',
+          notes: [],
+          params: {
+            boardA: { thickness: 18, width: 200 },
+            // 缺 boardB
+            wood: 'hardwood',
+            fit: 'standard',
+            kerfMm: 1.1,
+          },
+        },
+      ],
+    }
+    render(<HomePage onImported={() => undefined} />)
+    const input = screen.getByTestId('import-input') as HTMLInputElement
+    await userEvent.upload(input, new File([JSON.stringify(bad)], 'bad.json', { type: 'application/json' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toMatch(/件B\/销板/)
+    expect(alert.textContent).toMatch(/缺少关键参数/)
+    expect(screen.queryAllByTestId('plan-card')).toHaveLength(0)
+    // 坏数据不得写回 localStorage
+    expect(JSON.parse(localStorage.getItem('wjb.plans.v1') ?? '[]')).toHaveLength(0)
+  })
+
+  it('导入缺木料/锯路的文件：按默认补全并提示，方案可打开', async () => {
+    const partial = {
+      id: 'fix1',
+      title: '缺补项',
+      parts: [],
+      scale: '1:1',
+      updatedAt: 1,
+      joints: [
+        {
+          kind: 'dovetail',
+          notes: [],
+          params: {
+            boardA: { thickness: 18, width: 200 },
+            boardB: { thickness: 18, width: 200 },
+            // 缺 wood / fit / kerfMm
+            dovetail: { angleRatio: 8 },
+          },
+        },
+      ],
+    }
+    render(<HomePage onImported={() => undefined} />)
+    const input = screen.getByTestId('import-input') as HTMLInputElement
+    await userEvent.upload(input, new File([JSON.stringify(partial)], 'fix.json', { type: 'application/json' }))
+    expect(await screen.findAllByTestId('plan-card')).toHaveLength(1)
+    const notice = await screen.findByTestId('import-notice')
+    expect(notice.textContent).toMatch(/木料/)
+    expect(notice.textContent).toMatch(/锯路/)
+  })
 })
 
 describe('参数流（受控组件契约）', () => {

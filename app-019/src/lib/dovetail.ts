@@ -3,6 +3,8 @@
 //  - 在齿板正面（展示面）划线：边距(半齿) + 齿1 + 槽 + 齿2 + ... + 齿n + 边距
 //  - 均衡布局：槽宽 = 齿根宽、边距 = 半个齿根宽 → Σ(齿顶宽) + Σ(齿根宽) = 板宽（严格闭合）
 //  - 齿顶宽（展示面）= 齿根宽 + 2 × 斜移量；斜移量 = 齿深 / 角度比 r（1:r）
+//  - 销板（B 板）：销严格落在齿间槽里，贴合面与齿板背面互补（全销宽 = 齿顶宽），
+//    向销板背面/半隐槽底按 1:r 收窄；两端各留一个半齿销（见 pins 与 geometry/views.ts）
 import type { Wood } from '../types'
 import { round01 } from './format'
 
@@ -31,12 +33,10 @@ export interface ToothCell {
 }
 
 export interface PinCell {
-  index: number
-  faceX: number
-  faceW: number
-  backX: number
-  backW: number
-  half: boolean // 边缘半齿
+  index: number // 0 = 左端半齿销，1..n−1 = 全销，n = 右端半齿销
+  jointX: number // 贴合面左边缘（与齿板背面互补：背面齿间槽即销宽端）
+  jointW: number // 贴合面处销宽（宽端：= 齿板背面槽宽 = 齿顶宽 topW）
+  half: boolean // 边缘半齿销
 }
 
 export interface DovetailResult {
@@ -104,33 +104,35 @@ export function computeDovetail(input: DovetailInput): DovetailResult {
   const closureError = Math.abs(x + margin - width)
 
   // —— 销板（B 板）互补齿形 ——
-  const pins: PinCell[] = []
-  pins.push({
-    index: 0,
-    faceX: 0,
-    faceW: margin,
-    backX: 0,
-    backW: margin + slopeOffset,
-    half: true,
-  })
-  for (let i = 0; i < n; i++) {
-    const t = teeth[i]
+  // 齿板端面（背面）与销板贴合面 y=0 在箱体角部同平面（尾端为直棱柱，伸出齿板后
+  // 沿长度保持齿根截面；端面看到的销与齿板【背面】图案互补）：
+  //  - 贴合面为销宽端：全销宽 = 背面槽宽 topW，半齿销宽 = 边距 + 单边斜移量
+  //  - 销向销板背面按 1:r 收窄（远端轮廓由 views 按销板深度推导：穿透=t_B，半隐=槽底）
+  //  - 全销严格落在齿与齿之间；两端为半齿销
+  const pins: PinCell[] = [
+    {
+      index: 0,
+      jointX: 0,
+      jointW: teeth[0].backX, // 背面首齿起点 = 边距 + 斜移量
+      half: true,
+    },
+  ]
+  // 第 i 个全销占据齿 i 与齿 i+1 之间在齿板【背面】的槽
+  for (let i = 0; i < n - 1; i++) {
+    const left = teeth[i]
+    const right = teeth[i + 1]
     pins.push({
       index: i + 1,
-      faceX: t.faceX,
-      faceW: t.topW,
-      backX: t.faceX,
-      backW: t.topW,
+      jointX: left.backX + left.rootW,
+      jointW: right.backX - (left.backX + left.rootW),
       half: false,
     })
   }
   const last = teeth[n - 1]
   pins.push({
     index: n,
-    faceX: last.faceX + last.topW,
-    faceW: margin,
-    backX: last.faceX + last.topW - slopeOffset,
-    backW: margin + slopeOffset,
+    jointX: last.backX + last.rootW,
+    jointW: width - (last.backX + last.rootW),
     half: true,
   })
 

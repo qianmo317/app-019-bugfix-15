@@ -111,6 +111,7 @@ input[type="number"] { width: 90px; text-align: right; }
 .warnings p { margin: 4px 0; color: var(--warn); }
 .error { color: #a33; }
 .ok { color: var(--ok); }
+.notice { color: #2b6a3f; background: #eef7f0; border: 1px solid #bfe0cb; border-radius: 6px; padding: 8px 12px; }
 .note { color: #777; font-size: 12px; }
 
 .tooth-table-wrap { margin-top: 16px; }
