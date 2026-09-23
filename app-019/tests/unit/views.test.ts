@@ -63,6 +63,26 @@ describe('三视图一致性（断言：正视图宽 = 俯视图宽）', () => {
     const front = views.find((v) => v.id === 'front')!
     expect(front.marks.map((m) => m.text)).toEqual(r.dovetail!.teeth.map((t) => String(t.index)))
   })
+
+  it('燕尾侧视图：两端半齿销有「半」标，整销梯形贴合面宽/背面窄', () => {
+    const joint = makeJoint('dovetail')
+    const r = computeJoint(joint)
+    const views = buildViews(joint, r)
+    const side = views.find((v) => v.id === 'side')!
+    // 两端半齿销标记
+    const halfMarks = side.marks.filter((m) => m.text === '半')
+    expect(halfMarks).toHaveLength(2)
+    // 整销数量 = 齿数 − 1
+    const pinMarks = side.marks.filter((m) => m.text.startsWith('销'))
+    expect(pinMarks).toHaveLength(r.dovetail!.teeth.length - 1)
+    // 存在从贴合面（y=0 宽）斜向背面（y=tB 窄）的斜边
+    const slants = side.lines.filter((l) => l.y1 === 0 && l.y2 === joint.params.boardB.thickness && l.x1 !== l.x2)
+    expect(slants.length).toBeGreaterThan(0)
+    // 左侧整销的左斜边：贴合面 x < 背面 x（向内收窄）
+    const firstPin = r.dovetail!.pins.find((p) => !p.half)!
+    const leftSlant = slants.find((l) => Math.abs(l.x1 - firstPin.mateX) < 1e-6)!
+    expect(leftSlant.x2).toBeGreaterThan(leftSlant.x1)
+  })
 })
 
 describe('切割清单', () => {

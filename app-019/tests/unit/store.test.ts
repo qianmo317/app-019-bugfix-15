@@ -34,18 +34,79 @@ describe('方案库导出/导入', () => {
       dovetail: { angleRatio: 6, teeth: 8 },
       kerfMm: 1.6,
     })
-    const restored = importJSON(exportJSON(plan))
-    expect(JSON.stringify(restored)).toBe(JSON.stringify(plan))
+    const { plan: restored, repaired } = importJSON(exportJSON(plan))
+    expect(JSON.stringify(restored.joints[0].params)).toBe(JSON.stringify(plan.joints[0].params))
     expect(restored.joints[0].params.boardA.width).toBe(240)
     expect(restored.joints[0].params.dovetail?.teeth).toBe(8)
+    expect(repaired).toEqual([])
   })
 
-  it('导入校验拒绝缺字段/坏 JSON', () => {
-    expect(() => importJSON('{}')).toThrow()
-    expect(() => importJSON('not json')).toThrow()
+  it('导入校验拒绝缺字段/坏 JSON，并说清缺哪一项', () => {
+    expect(() => importJSON('{}')).toThrow(/joints/)
+    expect(() => importJSON('not json')).toThrow(/合法 JSON/)
     expect(() =>
       importJSON(JSON.stringify({ id: 'x', title: 't', joints: [{ kind: 'dovetail' }] })),
     ).toThrow(/params/)
+    // 缺板厚：错误信息必须点名缺的是哪一项，且不得写库
+    expect(() =>
+      importJSON(
+        JSON.stringify({
+          id: 'x',
+          title: 't',
+          joints: [
+            {
+              kind: 'dovetail',
+              params: { boardA: { width: 200 }, boardB: { thickness: 18, width: 200 } },
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/件 A 板厚/)
+    expect(loadPlans()).toHaveLength(0)
+    // 缺整块板 B
+    expect(() =>
+      importJSON(
+        JSON.stringify({
+          id: 'x',
+          joints: [{ kind: 'lap', params: { boardA: { thickness: 18, width: 200 } } }],
+        }),
+      ),
+    ).toThrow(/件 B（销板\/榫孔板）整项/)
+    // 非法 kind
+    expect(() =>
+      importJSON(JSON.stringify({ joints: [{ kind: 'finger', params: { boardA: { thickness: 1, width: 2 }, boardB: { thickness: 1, width: 2 } } }] })),
+    ).toThrow(/kind/)
+  })
+
+  it('缺木料/配合/锯路等可补项：按默认补齐并列出补齐项，不影响出图', () => {
+    const { plan, repaired } = importJSON(
+      JSON.stringify({
+        id: 'p1',
+        title: '缺补项',
+        joints: [
+          {
+            kind: 'mortise-tenon',
+            params: {
+              boardA: { thickness: 20, width: 200 },
+              boardB: { thickness: 20, width: 200 },
+              // 缺 wood / fit / kerfMm
+            },
+          },
+        ],
+      }),
+    )
+    const p = plan.joints[0].params
+    expect(p.wood).toBe('hardwood')
+    expect(p.fit).toBe('standard')
+    expect(p.kerfMm).toBe(1.1)
+    expect(repaired.join(' ')).toMatch(/木料种类/)
+    expect(repaired.join(' ')).toMatch(/配合松紧/)
+    expect(repaired.join(' ')).toMatch(/锯路宽度/)
+    // 补齐后必须能正常计算+出图（无 NaN/空白）
+    const r = computeJoint(plan.joints[0])
+    const views = buildViews(plan.joints[0], r)
+    expect(views).toHaveLength(3)
+    expect(Number.isFinite(r.tenon!.tenonThickness)).toBe(true)
   })
 
   it('按「榫卯类型 + 木料厚度」筛选', () => {

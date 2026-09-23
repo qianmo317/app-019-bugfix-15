@@ -11,6 +11,7 @@ export function HomePage({ onImported }: { onImported: (p: Drawing) => void }) {
   const [kind, setKind] = useState<JointKind | 'all'>('all')
   const [thickness, setThickness] = useState<number | 'all'>('all')
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
 
   const plans = useMemo(() => {
     void version
@@ -34,16 +35,21 @@ export function HomePage({ onImported }: { onImported: (p: Drawing) => void }) {
   const onFile = (file: File) => {
     const reader = new FileReader()
     reader.onload = () => {
+      setError('')
+      setNotice('')
       try {
-        const plan = importJSON(String(reader.result ?? ''))
-        upsertPlan({ ...plan, id: plan.id })
+        const { plan, repaired } = importJSON(String(reader.result ?? ''))
+        upsertPlan(plan)
         onImported(plan)
         setVersion((v) => v + 1)
+        if (repaired.length > 0) {
+          setNotice(`已导入，但以下项缺失/非法，已按默认补齐：${repaired.join('；')}。请打开方案核对后再保存。`)
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : '导入失败')
       }
     }
-    reader.onerror = () => setError('导入失败')
+    reader.onerror = () => setError('导入失败：文件读取失败')
     reader.readAsText(file)
   }
 
@@ -102,6 +108,7 @@ export function HomePage({ onImported }: { onImported: (p: Drawing) => void }) {
       </div>
 
       {error && <p className="error" role="alert">{error}</p>}
+      {notice && <p className="ok import-notice" role="status">{notice}</p>}
 
       <ul className="plan-list">
         {plans.map((p) => (

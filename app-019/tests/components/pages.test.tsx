@@ -147,6 +147,46 @@ describe('列表页：筛选 + 删除 + 导入', () => {
     expect(await screen.findAllByTestId('plan-card')).toHaveLength(1)
     expect(onImported).toHaveBeenCalled()
   })
+
+  it('导入缺板厚（关键项）：明确报错说清缺项，且不写方案库', async () => {
+    render(<HomePage onImported={() => undefined} />)
+    const input = screen.getByTestId('import-input') as HTMLInputElement
+    const bad = {
+      id: 'bad1',
+      title: '缺板厚',
+      joints: [
+        { kind: 'dovetail', params: { boardA: { width: 200 }, boardB: { thickness: 18, width: 200 } } },
+      ],
+    }
+    await userEvent.upload(input, new File([JSON.stringify(bad)], 'bad.json', { type: 'application/json' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('件 A 板厚')
+    expect(screen.queryAllByTestId('plan-card')).toHaveLength(0)
+  })
+
+  it('导入缺木料（可补项）：照常导入并提示按默认补齐', async () => {
+    render(<HomePage onImported={() => undefined} />)
+    const input = screen.getByTestId('import-input') as HTMLInputElement
+    const repairable = {
+      id: 'rep1',
+      title: '缺木料',
+      joints: [
+        {
+          kind: 'dovetail',
+          params: {
+            boardA: { thickness: 18, width: 200 },
+            boardB: { thickness: 18, width: 200 },
+            fit: 'standard',
+            kerfMm: 1.1,
+          },
+        },
+      ],
+    }
+    await userEvent.upload(input, new File([JSON.stringify(repairable)], 'r.json', { type: 'application/json' }))
+    expect(await screen.findAllByTestId('plan-card')).toHaveLength(1)
+    const notice = await screen.findByRole('status')
+    expect(notice).toHaveTextContent('木料种类')
+  })
 })
 
 describe('参数流（受控组件契约）', () => {

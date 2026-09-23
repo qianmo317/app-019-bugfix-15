@@ -18,6 +18,7 @@ export interface DovetailInput {
   teeth?: number    // 齿数（缺省自动建议）
   kerf: number      // 锯路宽度 (mm)
   wood: Wood
+  pinThickness?: number     // 销板（B 板）厚度，缺省与齿板同厚（决定销板斜移量 tB/r）
   blind?: boolean          // 半隐燕尾
   blindDepthRatio?: number // 半隐深度比例，默认 0.75
 }
@@ -32,11 +33,17 @@ export interface ToothCell {
 
 export interface PinCell {
   index: number
-  faceX: number
-  faceW: number
+  /** 贴合面（与齿板贴合的一面，y=0）处左缘 x */
+  mateX: number
+  /** 贴合面处销宽（宽端，与齿间槽互补） */
+  mateW: number
+  /** 背面（y=tB，外侧）处左缘 x */
   backX: number
+  /** 背面处销宽（窄端 = mateW − 2×销板斜移量） */
   backW: number
-  half: boolean // 边缘半齿
+  /** 销板沿厚度方向的单边斜移量 = 销板厚 / r */
+  taper: number
+  half: boolean // 边缘半齿销
 }
 
 export interface DovetailResult {
@@ -50,6 +57,7 @@ export interface DovetailResult {
   closureError: number // |Σ齿顶 + Σ齿根 − 板宽|
   minRootW: number
   minTopW: number
+  minPinBackW: number // 整销背面最窄处（n−1 个整销）
 }
 
 /** 齿数自动建议：目标齿距约 28mm，并保证齿根宽不低于最小安全值 */
@@ -90,47 +98,66 @@ export function computeDovetail(input: DovetailInput): DovetailResult {
   const topUnits: number[] = pairs.map((p) => Math.round((p + d) / 2))
   const rootUnits: number[] = pairs.map((p, i) => p - topUnits[i])
 
-  // 边距（半齿）= 末齿齿根宽一半，左右严格对称；槽宽 = 对应齿的齿根宽
+  // 边距（半齿）= 末齿齿根宽一半，左右严格对称；槽宽 = 相邻齿根宽
   const margin = (rootUnits[n - 1] / 2) * U
+  // 齿背单边斜移（0.1mm 网格）：d = round(2×斜移/0.1)，背面偏移取 d/2 格
+  const backShift = (d / 2) * U
   const teeth: ToothCell[] = []
   let x = margin
   for (let i = 0; i < n; i++) {
     const topW = topUnits[i] * U
     const rootW = rootUnits[i] * U
-    teeth.push({ index: i + 1, topW, rootW, faceX: x, backX: x + slopeOffset })
+    teeth.push({ index: i + 1, topW, rootW, faceX: x, backX: x + backShift })
     x += topW
     if (i < n - 1) x += rootW // 齿间槽
   }
   const closureError = Math.abs(x + margin - width)
 
   // —— 销板（B 板）互补齿形 ——
+  // 齿板端面布局：边距 + 齿1 + 槽1 + 齿2 + … + 槽(n-1) + 齿n + 边距
+  // 销板端面必须是它的互补件：n+1 个销，其中 n−1 个整销一一落进齿间槽，两端各一个半齿销。
+  // 贴合面与齿板背面同廓：整销边界直接取相邻齿根的实际坐标（snap 到 0.1 网格，逐格重合无缝）；
+  // 背面沿销板厚再收 1:r 斜度：单边斜移 pinTaper = tB/r（同厚时与齿背半步长一致）。
+  const pinTaper =
+    input.pinThickness === undefined || Math.abs((input.pinThickness ?? thickness) - thickness) < 1e-9
+      ? backShift
+      : round01(input.pinThickness ?? thickness) / ratio
+  const snap = (v: number) => Math.round(v / U) * U
+  const halfMateW = snap(margin + backShift)
   const pins: PinCell[] = []
+  // 左端半齿销：贴合面 [0, margin + backShift]，外缘贴板边只收内侧
   pins.push({
     index: 0,
-    faceX: 0,
-    faceW: margin,
+    mateX: 0,
+    mateW: halfMateW,
     backX: 0,
-    backW: margin + slopeOffset,
+    backW: halfMateW - pinTaper,
+    taper: pinTaper,
     half: true,
   })
-  for (let i = 0; i < n; i++) {
-    const t = teeth[i]
+  // 整销：落在齿 i 与齿 i+1 之间的槽里（共 n−1 个）
+  for (let i = 0; i < n - 1; i++) {
+    const mateX = snap(teeth[i].backX + teeth[i].rootW)
+    const mateW = snap(teeth[i + 1].backX - mateX)
     pins.push({
       index: i + 1,
-      faceX: t.faceX,
-      faceW: t.topW,
-      backX: t.faceX,
-      backW: t.topW,
+      mateX,
+      mateW,
+      backX: mateX + pinTaper,
+      backW: mateW - 2 * pinTaper,
+      taper: pinTaper,
       half: false,
     })
   }
-  const last = teeth[n - 1]
+  // 右端半齿销：贴合面 [W − margin − backShift, W]
+  const rightMateX = snap(width - halfMateW)
   pins.push({
     index: n,
-    faceX: last.faceX + last.topW,
-    faceW: margin,
-    backX: last.faceX + last.topW - slopeOffset,
-    backW: margin + slopeOffset,
+    mateX: rightMateX,
+    mateW: halfMateW,
+    backX: rightMateX + pinTaper,
+    backW: halfMateW - pinTaper,
+    taper: pinTaper,
     half: true,
   })
 
@@ -161,6 +188,14 @@ export function computeDovetail(input: DovetailInput): DovetailResult {
   if (n < 2 || n > 12) {
     warnings.push(`齿数 ${n} 超出合理范围（2~12）`)
   }
+  // 销板互补校验：整销背面宽不得被斜度吃光（背面宽 = 槽根宽 − 2×tB/r）
+  const fullPins = pins.filter((p) => !p.half)
+  const minPinBack = fullPins.length ? Math.min(...fullPins.map((p) => p.backW)) : Infinity
+  if (minRoot >= 0 && minPinBack < 0) {
+    warnings.push(
+      `销板斜度 1:${ratio} 过大：整销背面宽为负值（销板厚 ${input.pinThickness ?? thickness}mm 时单边收窄 ${pinTaper.toFixed(1)}mm），销会被切没。请增大角度比（r）、减薄销板或减少齿数`,
+    )
+  }
 
   return {
     teeth,
@@ -173,5 +208,6 @@ export function computeDovetail(input: DovetailInput): DovetailResult {
     closureError,
     minRootW,
     minTopW,
+    minPinBackW: Number.isFinite(minPinBack) ? minPinBack : 0,
   }
 }

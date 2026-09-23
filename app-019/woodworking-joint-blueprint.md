@@ -76,6 +76,7 @@ interface ViewModel { id: 'front'|'top'|'side'; title: string; contentW: number;
   ```
   逐齿偏差 ≤ 1 格（0.1mm），闭合误差 `closureError` 每轮实测（编辑器页脚显示到小数点后 3 位）。
 - **齿数建议（`dovetail.ts:56`）**：目标齿距约 28mm，`clamp(round(板宽/28), 2, 12)`，然后在不超过 2 齿的前提下递减，直到齿根宽 ≥ 最小安全值。
+- **销板互补齿形（`dovetail.ts:116-162`）**：n 齿对应 **n+1 个销**——n−1 个整销一一对准齿板的齿间槽（贴合面边界直接取相邻齿根实际坐标并 snap 到 0.1mm 网格，销/槽逐格重合，不与齿正面顶撞），两端各一个半齿销（外缘贴板边、只收内侧）。贴合面（y=0）为宽端，背面（y=tB）为窄端，整销每边按角度比收窄 `pinTaper = tB/r`（两板同厚时等于齿背半步长）；侧视图两端标「半」、整销标「销k」。整销背面宽为负（销被斜度切没）时写入 `warnings`，结果暴露 `minPinBackW`。
 - **不静默放行**：齿根 < `MIN_ROOT`（软木 6mm / 硬木 4mm，`dovetail.ts:12`）、齿顶 < 2×kerf（锯片切不出来）、板宽 ≥ 150 而齿数 < 3、齿距 < 15mm、齿数为负值或超出 2~12，都写入 `warnings` 并在编辑器 `role="alert"` 区域展示。
 - **直榫经验公式（`src/lib/tenon.ts:42-53`）**：
   ```text
@@ -106,7 +107,7 @@ interface ViewModel { id: 'front'|'top'|'side'; title: string; contentW: number;
 - **三视图**：六种类型逐一断言 `front.contentW === top.contentW`，每类 3 个视图，几何坐标不越界；燕尾锯切线数 = 2 × 齿数，齿序编号覆盖每个齿。
 - **导出/导入**：`importJSON(exportJSON(plan))` 与原文 `JSON.stringify` 全等；缺字段或坏 JSON 必须抛错；E2E 覆盖「导出 → 删除 → 导入 → viewBox 与参数一致」。
 - **性能**：参数改动到图纸重算 < 100ms（README 记录 0.51ms，本机重跑 0.57ms）。
-- **测试总量**：vitest 5 个文件 53 例 = 单元 43（dovetail 8 / tenon 13 / views 14 / store 8）+ 组件 10；Playwright E2E 7 例。
+- **测试总量**：vitest 5 个文件 61 例 = 单元 49（dovetail 12 / tenon 13 / views 15 / store 9）+ 组件 12；Playwright E2E 7 例。
 - **打印**：页面含 100mm 校验尺，实测 0→100 段误差 ≤ 1mm；打印调用与模板页可被 E2E 断言。
 - **容器**：`docker compose up -d --build` 后 `curl http://localhost:8099/healthz` 返回 `ok`，容器 healthy（详见 §12）。
 
@@ -121,7 +122,7 @@ interface ViewModel { id: 'front'|'top'|'side'; title: string; contentW: number;
 4. **榫眼 +1mm 的解释与代码/知识卡不同**：README 写「穿透深度 = 榫孔板厚 + 1（露出部分便于修平）」，代码注释与知识卡都写的是眼底留量防（胶）顶底；且加 1mm 的是 `mortiseDepth`，`tenonLength` 不加（`tenon.ts:50-51`）。
 5. **`Scale` 与多榫卯只有模型没有界面**：`Drawing.scale` 恒为 `'1:1'`（`store/plans.ts:95`），`Part.jointIds` 恒为空数组（`plans.ts:91-92`）；编辑器只渲染 `joints[0]`（`EditorPage.tsx:40`），方案筛选同样只看 `joints[0]`（`plans.ts:42`），打印视图按实际尺寸出（`EditorPage.tsx:276`），因此 1:2 / 1:5 出图与单方案多榫卯均未实现。
 6. **图内注释文字与线型不完全对得上**：`views.ts:120` 的提示写「细线=理论线　虚线=锯切线」，而正视图的理论轮廓用的是 `cut`（0.5 实线），`thin`（0.25）只用在俯视图大面划线上。
-7. **导入校验偏松**：`importJSON` 只校验 `id/title/joints/joints[0].kind/params.boardA`（`plans.ts:58-64`），缺 `boardB`、`wood`、`fit`、`kerfMm` 的 JSON 会被接受，随后计算可能得到 `NaN` 尺寸而不是报错。
+7. **导入校验已收紧**：`importJSON`（`src/store/plans.ts`）逐项校验 `joints[0].kind`（六类之一）与 `params.boardA/boardB` 的 `thickness/width`（正有限数），缺任一关键项都**拒绝导入且错误信息点名缺项**，坏数据不会写回方案库；木料/配合/锯路/方案外壳等可补项按默认补齐（硬木/标准/1.1mm 等），返回 `{ plan, repaired }`，首页用 `role="status"` 提示补齐了哪些项。完整方案走快速路径原样返回，仍满足导出→导入与原文全等。
 8. **`Joint.notes` 未被使用**：`makePlan` 的第 3 个参数默认空数组，两个调用点都不传，编辑器也不渲染。
 
 ## 12. 容器化与构建（Docker）

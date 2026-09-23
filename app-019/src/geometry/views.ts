@@ -138,27 +138,46 @@ function dovetailViews(kind: JointKind, p: Joint['params'], dt: DovetailResult):
   }
   top.texts.push({ x: 0, y: LJ + 24, text: '↑ 拼接端；按虚线（锯切线）下锯', anchor: 'start', cls: 'note' })
 
-  // 侧视图：销板端面（W_B × t_B），燕尾互补齿
+  // 侧视图：销板端面（W_B × t_B），与齿板互补的销形
+  // y=0 贴合面（宽端，销落进齿间槽）→ y=tB 背面（窄端，按 1:r 每边收窄 tB/r）
+  // 销坐标按齿板宽 W 生成；销板宽 Wb 与 W 不等时等比映射（同宽 k=1）
   const side = base('side', '侧视图 · 销板端面', Wb, tB)
   rect(side, 0, 0, Wb, tB)
-  const slope = tB / ratio
+  const k = W > 0 ? Wb / W : 1
   for (const pin of dt.pins) {
-    const y1 = 0 // 与齿板背面贴合面
-    const y2 = tB
-    const w1 = pin.backW // 贴合面处销宽
-    const w2 = Math.max(0.5, pin.backW - 2 * slope) // 远端收窄
-    const x1 = pin.backX
-    const x2 = pin.backX + (w1 - w2) / 2
-    side.lines.push(
-      { x1: x1, y1: y1, x2: x2, y2: y2, cls: 'cut' },
-      { x1: x1 + w1, y1: y1, x2: x2 + w2, y2: y2, cls: 'cut' },
-      { x1: x2, y1: y2, x2: x2 + w2, y2: y2, cls: 'cut' },
-    )
-    if (!pin.half) side.marks.push({ x: x1 + w1 / 2, y: tB / 2, text: `销${pin.index}` })
+    const mateX = pin.mateX * k
+    const mateW = pin.mateW * k
+    const backX = pin.backX * k
+    const bw = Math.max(0, pin.backW) * k
+    if (pin.half) {
+      // 两端半齿销：外缘与板边重合（不重画），只画内缘斜边 + 背面短刻线
+      const innerMate = pin.index === 0 ? mateX + mateW : mateX
+      const innerBack = pin.index === 0 ? backX + bw : backX
+      side.lines.push({ x1: innerMate, y1: 0, x2: innerBack, y2: tB, cls: 'cut' })
+      side.lines.push({ x1: backX, y1: tB, x2: backX + bw, y2: tB, cls: 'thin' })
+      side.marks.push({ x: mateX + mateW / 2, y: tB / 2, text: '半' })
+    } else {
+      // 整销：两侧斜边 + 背面闭合线
+      side.lines.push(
+        { x1: mateX, y1: 0, x2: backX, y2: tB, cls: 'cut' },
+        { x1: mateX + mateW, y1: 0, x2: backX + bw, y2: tB, cls: 'cut' },
+        { x1: backX, y1: tB, x2: backX + bw, y2: tB, cls: 'cut' },
+      )
+      side.marks.push({ x: mateX + mateW / 2, y: tB / 2, text: `销${pin.index}` })
+    }
   }
   hdim(side, 0, Wb, tB + 12, `板宽 ${fmtDrawing(Wb)}`)
   vdim(side, 0, tB, -12, `厚 ${fmtDrawing(tB)}`)
-  side.texts.push({ x: 0, y: tB + 24, text: blind ? `配齿板：齿深 ${fmtDrawing(dt.depth)}mm（半隐）` : '配齿板：穿透', anchor: 'start', cls: 'note' })
+  if (dt.pins[0]) {
+    hdim(side, 0, dt.pins[0].mateW * k, -10, `半销 ${fmtDrawing(dt.pins[0].mateW)}`)
+  }
+  side.texts.push({
+    x: 0,
+    y: tB + 24,
+    text: `${blind ? `配齿板：齿深 ${fmtDrawing(dt.depth)}mm（半隐）` : '配齿板：穿透'}；销斜度 1:${ratio}，贴合面宽→背面每边收窄 ${fmtDrawing(dt.pins[0]?.taper ?? 0)}mm（两端「半」为半齿销）`,
+    anchor: 'start',
+    cls: 'note',
+  })
 
   return [front, top, side]
 }

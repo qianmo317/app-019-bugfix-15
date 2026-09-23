@@ -29,6 +29,7 @@ export function computeJoint(joint: Joint): JointResult {
         teeth: params.dovetail?.teeth,
         kerf: params.kerfMm,
         wood: params.wood,
+        pinThickness: params.boardB.thickness,
         blind: kind === 'half-blind-dovetail',
       })
       result.dovetail = dt

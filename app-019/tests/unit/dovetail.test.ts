@@ -38,7 +38,7 @@ describe('燕尾齿宽分配（蓝图 §8 约束）', () => {
       const wood = rand() < 0.5 ? 'softwood' : 'hardwood'
       const thickness = Math.round((12 + rand() * 24) * 2) / 2 // 12~36
       const kerf = [0.8, 1.1, 1.6, 2.2][Math.floor(rand() * 4)]
-      const r = computeDovetail({ width, thickness, ratio, teeth, kerf, wood })
+      const r = computeDovetail({ width, thickness, ratio, teeth, kerf, wood, pinThickness: thickness })
 
       // 1) 闭合 ≤ 0.1mm
       expect(r.closureError).toBeLessThanOrEqual(0.1)
@@ -52,14 +52,15 @@ describe('燕尾齿宽分配（蓝图 §8 约束）', () => {
       expect(r.teeth[0].faceX).toBeCloseTo(r.margin, 6)
       const last = r.teeth[r.teeth.length - 1]
       expect(last.faceX + last.topW + r.margin).toBeCloseTo(width, 6)
-      // 4) 低于最小安全值 / 锯路限制 → 必须有警告
+      // 4) 低于最小安全值 / 锯路限制 / 销背面被斜度吃光 → 必须有警告
       const minRoot = Math.min(...r.teeth.map((t) => t.rootW))
       const minTop = Math.min(...r.teeth.map((t) => t.topW))
       const mustWarn =
         minRoot < MIN_ROOT[wood] ||
         (minTop < 2 * kerf && minTop >= 0) ||
         (teeth < 3 && width >= 150) ||
-        width / teeth < 15
+        width / teeth < 15 ||
+        (minRoot >= 0 && r.minPinBackW < 0)
       if (minRoot < MIN_ROOT[wood]) belowMinCount++
       if (mustWarn) {
         expect(r.warnings.length).toBeGreaterThan(0)
@@ -114,5 +115,76 @@ describe('燕尾齿宽分配（蓝图 §8 约束）', () => {
     expect(n).toBeGreaterThanOrEqual(2)
     const r = computeDovetail({ width: 45, thickness: 18, ratio: 6, teeth: n, kerf: 1.1, wood: 'softwood' })
     expect(Math.min(...r.teeth.map((t) => t.rootW))).toBeGreaterThanOrEqual(MIN_ROOT.softwood - 1e-9)
+  })
+
+  it('销板：n+1 个销（两端半齿销），整销一一落进齿间槽（不与齿正面重合）', () => {
+    const r = computeDovetail({ width: 200, thickness: 18, ratio: 8, teeth: 5, kerf: 1.1, wood: 'hardwood', pinThickness: 18 })
+    expect(r.pins).toHaveLength(5 + 1)
+    const halves = r.pins.filter((p) => p.half)
+    const fulls = r.pins.filter((p) => !p.half)
+    expect(halves).toHaveLength(2)
+    expect(fulls).toHaveLength(5 - 1)
+    // 两端是半齿销
+    expect(r.pins[0].half).toBe(true)
+    expect(r.pins[r.pins.length - 1].half).toBe(true)
+    // 每个整销占据齿 i 与齿 i+1 之间的槽：贴合面（与齿板背面同廓）
+    // 销 mate 区间 == [齿i 齿根右缘, 齿i+1 齿根左缘]
+    for (let i = 0; i < 4; i++) {
+      const ti = r.teeth[i]
+      const tj = r.teeth[i + 1]
+      const pin = fulls[i]
+      expect(pin.mateX).toBeCloseTo(ti.backX + ti.rootW, 6)
+      expect(pin.mateX + pin.mateW).toBeCloseTo(tj.backX, 6)
+    }
+    // 互补铺合（贴合面 = 与齿板背面同廓）：半销 + 齿根 + 整销铺满 [0, W]，销与齿不正面顶撞
+    // 相邻销/齿边界取 0.1mm 网格，逐段缝隙 ≤ 1 格（与闭合误差同等级）
+    const GAP_TOL = 0.1 + 1e-9
+    const mateSegs: [number, number][] = []
+    for (const p of r.pins) mateSegs.push([p.mateX, p.mateX + p.mateW])
+    for (const th of r.teeth) mateSegs.push([th.backX, th.backX + th.rootW])
+    mateSegs.sort((a, b) => a[0] - b[0])
+    expect(mateSegs[0][0]).toBeCloseTo(0, 6)
+    for (let i = 1; i < mateSegs.length; i++) {
+      expect(Math.abs(mateSegs[i][0] - mateSegs[i - 1][1])).toBeLessThanOrEqual(GAP_TOL)
+    }
+    expect(Math.abs(mateSegs[mateSegs.length - 1][1] - 200)).toBeLessThanOrEqual(GAP_TOL)
+    // 背面区间必须严格落在各自贴合面区间内（沿厚度收窄，不会切到邻齿）
+    for (const p of r.pins) {
+      expect(p.backX).toBeGreaterThanOrEqual(p.mateX - 1e-9)
+      expect(p.backX + p.backW).toBeLessThanOrEqual(p.mateX + p.mateW + 1e-9)
+    }
+  })
+
+  it('销板：贴合面宽、背面窄，整销每边收窄 tB/r；半齿销外缘贴板边只收内侧', () => {
+    const r = computeDovetail({ width: 200, thickness: 18, ratio: 6, teeth: 4, kerf: 1.1, wood: 'hardwood', pinThickness: 18 })
+    const taper = 18 / 6 // 3mm
+    for (const p of r.pins) {
+      expect(p.taper).toBeCloseTo(taper, 6)
+    }
+    // 整销：两侧各收 taper
+    const f = r.pins.find((p) => !p.half)!
+    expect(f.backW).toBeCloseTo(f.mateW - 2 * taper, 6)
+    expect(f.backX - f.mateX).toBeCloseTo(taper, 6)
+    // 两端半齿销：外缘贴板边（左 backX=0，右 backX+backW=W），只内收一侧
+    const left = r.pins[0]
+    const right = r.pins[r.pins.length - 1]
+    expect(left.backX).toBeCloseTo(0, 6)
+    expect(left.backW).toBeCloseTo(left.mateW - taper, 6)
+    expect(right.backX + right.backW).toBeCloseTo(200, 6)
+  })
+
+  it('销板：销板厚度不同，收窄量按 tB/r（与齿板厚无关）', () => {
+    const r = computeDovetail({ width: 200, thickness: 12, ratio: 8, teeth: 4, kerf: 1.1, wood: 'hardwood', pinThickness: 20 })
+    for (const p of r.pins) {
+      expect(p.taper).toBeCloseTo(20 / 8, 6)
+    }
+  })
+
+  it('销板：整销背面被斜度吃光（齿根尚可、销侧过陡）时必须警告', () => {
+    // 齿板 t=18、销板 tB=30（抽屉前脸更厚）、1:6：槽根宽约 5mm，销背面宽 −0.6mm
+    const r = computeDovetail({ width: 90, thickness: 18, ratio: 6, teeth: 7, kerf: 0.8, wood: 'hardwood', pinThickness: 30 })
+    expect(Math.min(...r.teeth.map((t) => t.rootW))).toBeGreaterThan(0)
+    expect(r.minPinBackW).toBeLessThan(0)
+    expect(r.warnings.some((w) => w.includes('销板斜度'))).toBe(true)
   })
 })
